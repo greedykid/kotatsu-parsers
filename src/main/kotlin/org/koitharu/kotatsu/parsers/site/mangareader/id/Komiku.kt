@@ -13,7 +13,12 @@ import java.util.EnumSet
 internal class Komiku(context: MangaLoaderContext) :
 	MangaReaderParser(context, MangaParserSource.KOMIKU, "komiku.org", pageSize = 20, searchPageSize = 10) {
 
-	private val apiDomain = "api.komiku.id"
+	// Komiku does not serve its catalogue inline — /pustaka/ carries only the
+	// filters, and the entries are pulled in afterwards with htmx. The endpoint
+	// that serves them moved: api.komiku.id no longer resolves at all, so the
+	// list and the search both came back empty while the site itself was fine.
+	// The new host is named in the hx-get attribute on komiku.org/pustaka/.
+	private val apiDomain = "api.komiku.org"
 	override val datePattern = "dd/MM/yyyy"
 	override val selectPage = "#Baca_Komik img"
 	override val selectTestScript = "script:containsData(thisIsNeverFound)"
@@ -206,7 +211,9 @@ internal class Komiku(context: MangaLoaderContext) :
 	}
 
 	private suspend fun fetchAvailableTags(): Set<MangaTag> {
-		val doc = webClient.httpGet("https://$apiDomain/").parseHtml()
+		// Not the API host: its root answers 500. The genre dropdown lives on the
+		// site's own library page, which is also where the filters are rendered.
+		val doc = webClient.httpGet("https://$domain/pustaka/").parseHtml()
 		val tags = mutableSetOf<MangaTag>()
 
 		doc.select("select[name='genre'] option").forEach { option ->
