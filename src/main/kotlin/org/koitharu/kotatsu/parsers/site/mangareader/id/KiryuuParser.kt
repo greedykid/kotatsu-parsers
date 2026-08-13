@@ -8,7 +8,10 @@ import org.koitharu.kotatsu.parsers.site.mangareader.MangaReaderParser
 
 @MangaSourceParser("KIRYUU", "Kiryuu", "id")
 internal class KiryuuParser(context: MangaLoaderContext) :
-	MangaReaderParser(context, MangaParserSource.KIRYUU, "kiryuu02.com", pageSize = 50, searchPageSize = 10) {
+	// kiryuu02.com is now only a landing page — every path under it answers 404,
+	// and its own genre links all point here instead. The selectors are left
+	// alone: this is a move, not a redesign.
+	MangaReaderParser(context, MangaParserSource.KIRYUU, "v7.kiryuu.to", pageSize = 50, searchPageSize = 10) {
 
 	override val listUrl = "/manga/"
 
