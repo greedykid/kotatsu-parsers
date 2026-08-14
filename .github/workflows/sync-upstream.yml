@@ -1,0 +1,89 @@
+name: Sync upstream
+
+# Upstream stopped developing this library in November 2025, but the sites it
+# parses did not stop moving. Domains change, layouts are rebuilt, and a parser
+# that worked last month starts returning nothing — this fork exists so those
+# can be patched, and this keeps it level with whatever upstream still lands.
+#
+# Weekly rather than nightly: parser breakage is measured in weeks, and a merge
+# is only worth looking at when there is something in it.
+on:
+  schedule:
+    - cron: '17 4 * * 1'
+  workflow_dispatch:
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # The whole history, because a merge cannot be computed from a shallow
+          # clone and would fail with an unrelated-histories error.
+          fetch-depth: 0
+
+      - name: Merge upstream master
+        id: merge
+        run: |
+          set -euo pipefail
+          git config user.name  'github-actions[bot]'
+          git config user.email 'github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/KotatsuApp/kotatsu-parsers.git
+          git fetch --no-tags upstream master
+
+          before=$(git rev-parse HEAD)
+          if git merge-base --is-ancestor upstream/master HEAD; then
+            echo "Already contains everything upstream has."
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # No --no-verify, no strategy option that resolves in our favour: this
+          # fork carries real changes to individual parsers, and a conflict means
+          # upstream touched one of them. That wants reading, not automating —
+          # the job fails and the merge is left to a person.
+          if ! git merge --no-edit upstream/master; then
+            git merge --abort
+            echo "::error::Upstream conflicts with a local parser fix. Merge by hand."
+            exit 1
+          fi
+
+          if [ "$(git rev-parse HEAD)" = "$before" ]; then
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          else
+            git push origin HEAD:master
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+            echo "sha=$(git rev-parse HEAD | cut -c1-10)" >> "$GITHUB_OUTPUT"
+          fi
+
+      # The app resolves this library from JitPack, which builds a commit the
+      # first time somebody asks for it. Asking here means the build — and any
+      # compile error the merge introduced — happens now rather than in the
+      # middle of a release.
+      - name: Build the merge on JitPack
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          SHA: ${{ steps.merge.outputs.sha }}
+        run: |
+          set -uo pipefail
+          curl -sS --max-time 600 -o /dev/null \
+            "https://jitpack.io/com/github/${GITHUB_REPOSITORY/\//\/}/$SHA/$(basename "$GITHUB_REPOSITORY")-$SHA.pom" || true
+
+          for _ in $(seq 1 60); do
+            status=$(curl -sS --max-time 60 \
+              "https://jitpack.io/api/builds/com.github.${GITHUB_REPOSITORY_OWNER}/$(basename "$GITHUB_REPOSITORY")/$SHA" \
+              | sed -n 's/.*"status" *: *"\([^"]*\)".*/\1/p')
+            case "$status" in
+              ok)    echo "JitPack built $SHA"; exit 0 ;;
+              Error) echo "::error::JitPack failed to build $SHA — the merge does not compile."; exit 1 ;;
+              *)     sleep 20 ;;
+            esac
+          done
+          echo "::warning::JitPack did not finish in time; $SHA may still be building."
